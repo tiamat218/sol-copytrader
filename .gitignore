@@ -1,0 +1,63 @@
+# Globale Ignorierungen für Python
+
+# Bytecode-Dateien
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtuelle Umgebungen (alle Verzeichnisse)
+venv/
+*/venv/
+
+# Log-Dateien
+*.log
+logs/
+*/logs/
+
+# Datenbanken
+*.db
+*.sqlite3
+*/data/
+*/database/
+
+# Paket-Manager
+node_modules/
+*/node_modules/
+
+# IDEs und Editoren
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Umgebungsvariablen und Konfiguration
+.env
+*.config.json
+config.yaml
+*/.env
+*/.config.json
+*/config.yaml
+
+# Build-Artefakte
+dist/
+build/
+*.egg
+*.egg-info/
+*.whl
+*.tar.gz
+*.zip
+
+# Jupyter Notebook Checkpoints
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# MacOS-spezifische Dateien
+.DS_Store
+
+# Windows-spezifische Dateien
+Thumbs.db
+desktop.ini
+
+# Sicherstellen, dass .gitignore nicht überschrieben wird
+!.gitignore
