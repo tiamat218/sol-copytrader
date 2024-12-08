@@ -59,5 +59,25 @@ build/
 Thumbs.db
 desktop.ini
 
+# Sicherheit für private Schlüssel und sensible Daten
+*.pem
+*.key
+*.crt
+*/keys/
+keys/
+secrets/
+*/secrets/
+
+# Zusätzliche Umgebungsvariablen-Dateien
+*.env.*
+config/*.yaml
+config/*.json
+
+# Schutz vor versehentlichem Hochladen von Backups
+*.bak
+*.backup
+*.old
+
 # Sicherstellen, dass .gitignore nicht überschrieben wird
 !.gitignore
+

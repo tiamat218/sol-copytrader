@@ -4,3 +4,6 @@ sqlalchemy
 pydantic
 solana
 sqlalchemy
+requests
+solders
+
