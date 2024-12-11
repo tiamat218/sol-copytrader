@@ -6,6 +6,14 @@ from solders.message import Message
 from solders.instruction import Instruction
 from solders.system_program import transfer, TransferParams
 from solders.hash import Hash
+from solders.rpc.requests import GetSignaturesForAddress
+from solders.transaction_status import EncodedTransactionWithStatusMeta
+from solders.transaction import Transaction
+from solders.transaction import VersionedTransaction
+from solders.rpc.responses import GetTransactionResp
+from solders.transaction_status import UiTransaction, UiCompiledInstruction
+import base64
+import traceback
 
 # Solana RPC-Endpunkt
 SOLANA_RPC_URL = "https://api.testnet.solana.com"
@@ -60,21 +68,68 @@ class SolanaClient:
         except Exception as e:
             print(f"Error in get_balance for {wallet_address}: {e}")
             return 0.0
-
-
-
-    def get_recent_transactions(self, wallet_address: str):
-        """Ruft die letzten Transaktionen einer Wallet ab."""
+        
+    def get_transaction_details(self, transaction_signature: str) -> dict:
+        """Liefert die Details einer Transaktion."""
         try:
-            pubkey = Pubkey.from_string(wallet_address)
-            response = self.client.get_signatures_for_address(pubkey, limit=10)
-            print(f"RPC Response for transactions: {response}")
-            if response and response.value is not None:
-                return response.value
-            return []
+            # Abrufen der Transaktionsdaten vom RPC
+            response = self.client.get_transaction(transaction_signature)
+
+            if response and response.value:
+                transaction_data = response.value.transaction.transaction
+                print(f"Transaction data: {transaction_data}")
+                print(f"Type of transaction data: {type(transaction_data)}")
+
+                if isinstance(transaction_data, UiTransaction):
+                    instructions = []
+                    for ui_instruction in transaction_data.message.instructions:
+                        instructions.append({
+                            "program_id_index": ui_instruction.program_id_index,
+                            "accounts": ui_instruction.accounts,
+                            "data": ui_instruction.data,
+                        })
+                    return {"instructions": instructions}
+
+                raise ValueError(f"Unsupported transaction format: {type(transaction_data)}")
+            else:
+                print("No transaction data found.")
+                return None
+
         except Exception as e:
-            print(f"Error in get_recent_transactions for {wallet_address}: {e}")
-            return []
+            # Loggen Sie die vollständige Fehlermeldung und den Stacktrace
+            error_details = traceback.format_exc()
+            print(f"Error in get_transaction_details: {e}")
+            print(f"Traceback: {error_details}")
+            return None
+
+    def get_transaction_details(self, transaction_signature: str) -> dict:
+        """Liefert die Details einer Transaktion."""
+        try:
+            # Abrufen der Transaktionsdaten vom RPC
+            response: GetTransactionResp = self.client.get_transaction(transaction_signature)
+
+            if response and response.value:
+                # Extrahiere die Transaktionsdaten
+                transaction_data = response.value.transaction.transaction
+
+                # Verarbeitung von UiTransaction
+                if isinstance(transaction_data, UiTransaction):
+                    instructions = []
+                    for ui_instruction in transaction_data.message.instructions:
+                        instructions.append({
+                            "program_id_index": ui_instruction.program_id_index,
+                            "accounts": ui_instruction.accounts,
+                            "data": ui_instruction.data,
+                        })
+                    return {"instructions": instructions}
+
+                raise ValueError(f"Unsupported transaction format: {type(transaction_data)}")
+            else:
+                print("No transaction data found.")
+                return None
+        except Exception as e:
+            print(f"Error in get_transaction_details: {e}")
+            return None
 
     def execute_transaction(self, recipient_address: str, amount: float):
         """Führt eine SOL-Transaktion aus."""
@@ -115,3 +170,60 @@ class SolanaClient:
         except Exception as e:
             print(f"Error in execute_transaction: {e}")
             return {"status": "failure", "error": str(e)}
+
+    async def execute_token_transaction(self, recipient, token, amount):
+        """Repliziert eine SPL-Token-Transaktion."""
+        if not self.keypair:
+            raise ValueError("Private key not set. Cannot execute transaction.")
+
+        try:
+            recipient_pubkey = Pubkey.from_string(recipient)
+            token_pubkey = Pubkey.from_string(token)
+            lamports = int(amount * 10**9)  # Konvertiere Token-Einheiten zu Lamports
+
+            instruction = transfer(
+                TransferParams(
+                    from_pubkey=self.keypair.pubkey(),
+                    to_pubkey=recipient_pubkey,
+                    lamports=lamports,
+                    program_id=token_pubkey
+                )
+            )
+
+            # Hole die aktuelle Blockhash
+            recent_blockhash_resp = self.client.get_recent_blockhash()
+            recent_blockhash = Hash.from_string(recent_blockhash_resp.value.blockhash)
+
+            # Nachricht und Transaktion erstellen
+            message = Message([instruction], self.keypair.pubkey())
+            transaction = Transaction(message, [self.keypair], recent_blockhash)
+
+            # Senden der Transaktion
+            response = self.client.send_transaction(transaction)
+            print(f"Token Transaction Response: {response}")
+        except Exception as e:
+            print(f"Error in execute_token_transaction: {e}")
+
+    def get_recent_transactions(self, wallet_address: str) -> list:
+        """Ruft die letzten Transaktionen einer Wallet ab."""
+        try:
+            pubkey = Pubkey.from_string(wallet_address)
+            response = self.client.get_signatures_for_address(pubkey)
+
+            # Überprüfen, ob die Antwort gültig ist
+            if response.value:
+                transactions = []
+                for tx in response.value:
+                    transactions.append({
+                        "signature": tx.signature,
+                        "slot": tx.slot,
+                        "err": tx.err,
+                        "memo": tx.memo,
+                        "block_time": tx.block_time,
+                        "confirmation_status": tx.confirmation_status
+                    })
+                return transactions[:10]
+            return []
+        except Exception as e:
+            print(f"Error in get_recent_transactions for {wallet_address}: {e}")
+            return []
