@@ -5,109 +5,107 @@ import traceback
 
 class MonitoringWorker:
     def __init__(self, solana_client):
-        self.running = False
         self.client = solana_client
+        self.running = False
+        self.subscribed_wallets = set()
 
     async def start(self):
-        """Startet den Monitoring-Worker."""
         if self.running:
-            print("Monitoring worker is already running.")
+            print("Monitoring worker already running.")
             return
 
         self.running = True
-        print("Monitoring worker starting...")
         asyncio.create_task(self.monitor_wallets())
+        print("Monitoring worker started.")
 
     async def stop(self):
-        """Stoppt den Monitoring-Worker."""
         self.running = False
-        print("Stopping monitoring worker...")
+        print("Monitoring worker stopped.")
 
     async def monitor_wallets(self):
-        """Überwacht Wallets und repliziert Transaktionen."""
-        print("Monitoring wallets...")
         while self.running:
             try:
                 with SessionLocal() as session:
                     wallets = get_wallets(session)
-                    print(f"Fetched wallets: {wallets}")
                     for wallet in wallets:
-                        source_wallet = wallet["wallet_address"]
+                        wallet_address = wallet["wallet_address"]
                         allocation = wallet["allocation_percentage"] / 100
-                        print(f"Processing wallet: {source_wallet}")
-                        await self.process_wallet(source_wallet, allocation)
+                        # Check if already subscribed
+                        if wallet_address not in self.subscribed_wallets:
+                            asyncio.create_task(self.subscribe_and_monitor(wallet_address, allocation))
             except Exception as e:
-                # Fehler im Monitoring loggen
-                error_details = traceback.format_exc()
                 print(f"Error in monitoring loop: {e}")
-                print(f"Traceback: {error_details}")
+                traceback.print_exc()
             finally:
-                # Sicherstellen, dass der Loop weiterläuft
                 await asyncio.sleep(1)
 
-
-    async def process_wallet(self, source_wallet, allocation):
-        """Repliziert alle Transaktionen eines Quell-Wallets auf der eigenen Wallet."""
+    async def subscribe_and_monitor(self, wallet_address: str, allocation: float):
         try:
-            # Guthaben des Quell-Wallets abrufen
-            source_balance = self.client.get_balance(source_wallet)
-            if source_balance <= 0:
-                print(f"Source wallet {source_wallet} has insufficient balance.")
-                return
+            self.subscribed_wallets.add(wallet_address)
+            balance = self.client.get_balance(wallet_address)
+            print(f"Wallet {wallet_address} Balance: {balance:.4f} SOL")
 
-            # Letzte Transaktionen des Quell-Wallets abrufen
-            transactions = self.client.get_recent_transactions(source_wallet)
-            if not transactions:
-                print(f"No recent transactions for wallet {source_wallet}.")
-                return
-
-            for tx in transactions:
-                # Details der Transaktion abrufen
-                signature = tx["signature"]
-                transaction_details = self.client.get_transaction_details(signature)
-        
-                if transaction_details:
-                    for instruction in transaction_details["instructions"]:
-                        recipient = instruction.get("recipient")
-                        amount = instruction.get("amount")  # Betrag der Transaktion
-                        token = instruction.get("token")  # Wenn SPL-Tokens involviert sind
-
-                        if recipient and amount:
-                            # Berechnung des Anteils
-                            percentage_of_source_balance = amount / source_balance
-                        
-                            # Guthaben des kopierenden Wallets abrufen
-                            own_balance = self.client.get_balance(self.client.keypair.pubkey())
-                            if own_balance <= 0:
-                                print("Insufficient balance in own wallet. Skipping transaction.")
-                                return
-                        
-                            # Positionsgröße berechnen
-                            position_size = own_balance * allocation * percentage_of_source_balance
-                            print(f"Calculated position size: {position_size} SOL for recipient {recipient}")
-
-                            # Transaktion ausführen
-                            if token:
-                                await self.execute_token_transaction(recipient, token, position_size)
-                            else:
-                                await self.execute_transaction(recipient, position_size)
+            await self.client.subscribe_to_transactions(
+                wallet_address,
+                lambda addr, tx_data: self.handle_transaction(addr, tx_data, allocation)
+            )
         except Exception as e:
-            print(f"Error processing wallet {source_wallet}: {e}")
+            print(f"Error monitoring wallet {wallet_address}: {e}")
+            self.subscribed_wallets.discard(wallet_address)
 
-
-    async def execute_transaction(self, recipient, allocation):
-        """Führt Transaktionen aus."""
+    async def handle_transaction(self, wallet_address: str, tx_data: dict, allocation: float):
         try:
-            balance = self.client.get_balance(self.client.keypair.pubkey())
-            if balance is None or balance <= 0:
-                print("Insufficient balance. Skipping transaction.")
+            print(f"Transaction Update for {wallet_address}: {tx_data}")
+
+            # Überprüfen, ob `result` ein dict ist
+            result = tx_data.get("result")
+            if isinstance(result, int):
+                print(f"Received an integer result: {result}. No further processing required.")
+                return  # Nichts zu tun, wenn `result` nur eine ID oder Ähnliches ist
+
+            if not isinstance(result, dict):
+                print(f"Unexpected result type: {type(result)}. Expected dict.")
                 return
 
-            amount = balance * allocation
-            result = self.client.execute_transaction(recipient, amount)
-            if result["status"] == "success":
-                print(f"Executed transaction: Sent {amount:.2f} SOL to {recipient}")
-            else:
-                print(f"Transaction failed: {result['error']}")
+            # Extrahiere Anweisungen aus der Transaktion
+            transaction = result.get("value", {}).get("transaction", {})
+            message = transaction.get("message", {})
+            instructions = message.get("instructions", [])
+            if not instructions:
+                print("No valid instructions found in the transaction.")
+                return
+
+            # Verarbeite jede Anweisung
+            for instruction in instructions:
+                accounts = instruction.get("accounts", [])
+                if len(accounts) < 2:
+                    print(f"Invalid instruction format: {instruction}")
+                    continue
+
+                recipient = accounts[1]  # Empfänger
+                amount = instruction.get("lamports", 0) / 10**9  # Lamports zu SOL umwandeln
+
+                # Berechne die Positionsgröße basierend auf der Allokation
+                source_balance = self.client.get_balance(wallet_address)
+                if source_balance <= 0:
+                    print(f"Source wallet {wallet_address} has insufficient balance.")
+                    return
+
+                own_balance = self.client.get_balance(self.client.keypair.pubkey())
+                if own_balance <= 0:
+                    print("Insufficient balance in own wallet. Skipping transaction.")
+                    return
+
+                position_size = own_balance * allocation * (amount / source_balance)
+                print(f"Calculated position size: {position_size} SOL for recipient {recipient}")
+
+                # Führe die Transaktion aus
+                if recipient:
+                    result = self.client.execute_transaction(recipient, position_size)
+                    if result:
+                        print(f"Copied transaction: {position_size:.4f} SOL to {recipient}")
+                    else:
+                        print("Failed to copy transaction.")
         except Exception as e:
-            print(f"Error in execute_transaction for recipient {recipient}: {e}")
+            print(f"Error handling transaction for {wallet_address}: {e}")
+

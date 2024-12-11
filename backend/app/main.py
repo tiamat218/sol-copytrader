@@ -5,6 +5,9 @@ from app.worker import MonitoringWorker
 from app.routes import router
 from app.solana_client import SolanaClient
 from contextlib import asynccontextmanager
+from fastapi.responses import JSONResponse
+from solders.pubkey import Pubkey
+import json
 
 # Initialisierung von SolanaClient und MonitoringWorker
 solana_client = SolanaClient()
